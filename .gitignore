@@ -1,0 +1,13 @@
+# Foundry (coming tonight)
+cache/
+out/
+broadcast/
+.env
+
+# Flutter (coming tomorrow)
+app/.dart_tool/
+app/build/
+app/.flutter-plugins*
+
+# Never commit keys
+*.key
