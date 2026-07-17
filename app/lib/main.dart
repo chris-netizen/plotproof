@@ -63,7 +63,7 @@ class _HomeState extends State<_Home> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      CheckScreen(chain: _chain),
+      CheckScreen(chain: _chain, wallet: _wallet),
       ClaimScreen(wallet: _wallet, chain: _chain, onStaked: _loadWallet),
     ];
 

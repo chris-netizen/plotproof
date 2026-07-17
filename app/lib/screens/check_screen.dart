@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:web3dart/crypto.dart' show hexToBytes;
+import 'package:web3dart/web3dart.dart';
 
 import '../geocell.dart';
 import '../services/chain_service.dart';
+import '../services/wallet_service.dart';
 import '../theme.dart';
 
 /// THE HERO SCREEN: check a plot before you pay.
@@ -12,7 +15,8 @@ import '../theme.dart';
 /// prior claim. Claims by different addresses = conflict warning.
 class CheckScreen extends StatefulWidget {
   final ChainService chain;
-  const CheckScreen({super.key, required this.chain});
+  final WalletService wallet;
+  const CheckScreen({super.key, required this.chain, required this.wallet});
 
   @override
   State<CheckScreen> createState() => _CheckScreenState();
@@ -28,10 +32,96 @@ class _CheckScreenState extends State<CheckScreen> {
   bool _busy = false;
   String? _error;
   bool _checked = false;
+  String? _myAddr; // this device's wallet, to offer transfer on owned claims
+
+  @override
+  void initState() {
+    super.initState();
+    widget.wallet.address().then((a) {
+      if (mounted) setState(() => _myAddr = a.hexEip55.toLowerCase());
+    });
+  }
 
   int get _claimantCount =>
       _claims.map((c) => c.claimant.hexEip55).toSet().length;
   bool get _hasConflict => _claimantCount > 1;
+
+  bool _ownedByMe(ChainClaim c) =>
+      _myAddr != null && c.owner.hexEip55.toLowerCase() == _myAddr;
+
+  Future<void> _transfer(ChainClaim claim) async {
+    final ctrl = TextEditingController();
+    final to = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Transfer this claim'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+                'Enter the buyer\'s wallet address. Ownership moves to them '
+                'on-chain, forming a verifiable sale trail.',
+                style: TextStyle(fontSize: 13.5, color: AppColors.inkSoft)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Buyer address',
+                hintText: '0x…',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Transfer')),
+        ],
+      ),
+    );
+    if (to == null || to.isEmpty) return;
+
+    EthereumAddress toAddr;
+    try {
+      toAddr = EthereumAddress.fromHex(to);
+    } catch (_) {
+      _snack('That is not a valid wallet address.');
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+        content: Text('Submitting transfer to Monad…'),
+        duration: Duration(seconds: 3)));
+    try {
+      final creds = await widget.wallet.load();
+      await widget.chain.transferClaim(
+        credentials: creds,
+        cell: hexToBytes(claim.cellHex),
+        index: claim.index,
+        to: toAddr,
+      );
+      messenger.hideCurrentSnackBar();
+      _snack('Claim transferred ✓');
+      if (_pin != null) _check(_pin!); // refresh to show new owner
+    } catch (e) {
+      messenger.hideCurrentSnackBar();
+      final s = e.toString().toLowerCase();
+      _snack(s.contains('insufficient funds') || s.contains('-32003')
+          ? 'Transfer needs a little gas. Fund your wallet with testnet MON and retry.'
+          : 'Transfer failed. Please try again.');
+    }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  }
 
   Future<void> _check(LatLng p) async {
     setState(() {
@@ -230,7 +320,12 @@ class _CheckScreenState extends State<CheckScreen> {
         const SizedBox(height: 8),
         ..._claims.map((c) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _ClaimTile(claim: c, fmt: fmt),
+              child: _ClaimTile(
+                claim: c,
+                fmt: fmt,
+                ownedByMe: _ownedByMe(c),
+                onTransfer: () => _transfer(c),
+              ),
             )),
       ],
     );
@@ -375,18 +470,27 @@ class _StateBanner extends StatelessWidget {
 class _ClaimTile extends StatelessWidget {
   final ChainClaim claim;
   final DateFormat fmt;
-  const _ClaimTile({required this.claim, required this.fmt});
+  final bool ownedByMe;
+  final VoidCallback onTransfer;
+  const _ClaimTile({
+    required this.claim,
+    required this.fmt,
+    required this.ownedByMe,
+    required this.onTransfer,
+  });
 
-  Color get _avatarColor {
-    final h = claim.claimant.hexEip55;
-    final v = int.parse(h.substring(2, 8), radix: 16);
+  static Color _colorFor(String hex) {
+    final v = int.parse(hex.substring(2, 8), radix: 16);
     return HSLColor.fromAHSL(1, (v % 360).toDouble(), 0.45, 0.42).toColor();
   }
 
+  static String _short(String addr) =>
+      '${addr.substring(0, 6)}…${addr.substring(addr.length - 4)}';
+
   @override
   Widget build(BuildContext context) {
-    final addr = claim.claimant.hexEip55;
-    final short = '${addr.substring(0, 6)}…${addr.substring(addr.length - 4)}';
+    final claimant = claim.claimant.hexEip55;
+    final owner = claim.owner.hexEip55;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -394,45 +498,99 @@ class _ClaimTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadii.card),
         border: Border.all(color: AppColors.border),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration:
-                BoxDecoration(color: _avatarColor, shape: BoxShape.circle),
-            child: const Icon(Icons.person, color: Colors.white, size: 20),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                    color: _colorFor(owner), shape: BoxShape.circle),
+                child: const Icon(Icons.person, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                              claim.note.isEmpty ? 'Unlabelled plot' : claim.note,
+                              style: const TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.ink)),
+                        ),
+                        if (ownedByMe) const _YoursBadge(),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Ownership line: shows the custody chain if transferred.
+                    if (claim.transferred)
+                      Text('Staked by ${_short(claimant)}  →  now '
+                          '${_short(owner)}',
+                          style: const TextStyle(
+                              fontFeatures: [FontFeature.tabularFigures()],
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.brand))
+                    else
+                      Text('Owner ${_short(owner)}',
+                          style: const TextStyle(
+                              fontFeatures: [FontFeature.tabularFigures()],
+                              fontSize: 12,
+                              color: AppColors.inkSoft)),
+                    const SizedBox(height: 2),
+                    Text(fmt.format(claim.timestamp.toLocal()),
+                        style: const TextStyle(
+                            fontFeatures: [FontFeature.tabularFigures()],
+                            fontSize: 11.5,
+                            color: AppColors.inkSoft)),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(claim.note.isEmpty ? 'Unlabelled plot' : claim.note,
-                    style: const TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.ink)),
-                const SizedBox(height: 4),
-                Text('$short   ·   ${fmt.format(claim.timestamp.toLocal())}',
-                    style: const TextStyle(
-                        fontFeatures: [FontFeature.tabularFigures()],
-                        fontSize: 12,
-                        color: AppColors.inkSoft)),
-                const SizedBox(height: 2),
-                Text(
-                    '${claim.lat.toStringAsFixed(6)}, '
-                    '${claim.lng.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                        fontFeatures: [FontFeature.tabularFigures()],
-                        fontSize: 11.5,
-                        color: AppColors.inkSoft)),
-              ],
+          if (ownedByMe) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onTransfer,
+                style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(40)),
+                icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                label: const Text('Transfer / sell this claim'),
+              ),
             ),
-          ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _YoursBadge extends StatelessWidget {
+  const _YoursBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.brandTint,
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+      ),
+      child: const Text('You own this',
+          style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.brand)),
     );
   }
 }

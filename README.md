@@ -32,9 +32,17 @@ this exact spot, on this date, with this evidence."* PlotProof is that place.
    cell, queries that cell **and its 8 neighbours** (so a plot straddling a boundary still
    surfaces), and lists every prior claim. **Claims from more than one address on the same spot
    raise a conflict warning — a possible double sale.**
-3. **Verify evidence** — because the hashing scheme is canonical and public, a claimant can later
+3. **Sell / transfer** — when the plot changes hands, the current owner transfers the claim to the
+   buyer's wallet on-chain. This records a verifiable **chain of custody** (`A → B`), so a genuine
+   sale becomes a *linked* trail instead of looking like a double sale. Only the current owner can
+   transfer, and the buyer becomes the recognised owner.
+4. **Verify evidence** — because the hashing scheme is canonical and public, a claimant can later
    re-hash their original photo + metadata and prove on-chain that *that* evidence existed at
    claim time.
+
+Because a legitimate sale is *one* claim transferred along a chain, while a fraudulent double sale
+is *two unlinked* claimants on the same plot, the conflict warning becomes a precise fraud signal
+rather than a false alarm.
 
 ## Live deployment
 
@@ -56,9 +64,12 @@ Check screen  ─ map tap    ─► geocell  ──► getClaimsBatch(cells[9]) 
 
 **Contract** ([`PlotProof.sol`](contracts/PlotProof.sol)) — a Solidity claim ledger indexed by
 `bytes32` geohash cell. `stakeClaim` appends a `Claim{claimant, evidenceHash, latE7, lngE7,
-timestamp, note}`; `getClaimsBatch` / `claimCounts` read a whole 9-cell block in one RPC round
-trip; `hasEvidence` supports later verification. Coordinates are validated on-chain and notes are
-length-bounded to keep costs down.
+timestamp, note}`; `transferClaim` hands a claim to a new owner (owner-only) and emits
+`ClaimTransferred`, forming an on-chain chain of custody; `getClaimsBatch` / `claimCounts` read a
+whole 9-cell block — with each claim's current owner — in one RPC round trip; `hasEvidence`
+supports later verification. Ownership is tracked in a side mapping so the original `Claim` (and
+thus the evidence hash, which commits to the original claimant) stays immutable. Coordinates are
+validated on-chain and notes are length-bounded to keep costs down.
 
 **App** (`app/lib/`)
 - `geocell.dart` — pure-Dart geohash encode/decode + neighbour math; encodes a cell as ASCII

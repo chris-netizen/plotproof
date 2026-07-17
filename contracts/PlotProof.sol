@@ -29,6 +29,15 @@ contract PlotProof {
     /// @dev geohash cell id (ASCII geohash right-padded into bytes32) => claims
     mapping(bytes32 => Claim[]) private _claimsByCell;
 
+    /// @dev current owner of a claim (cell => index => owner). address(0)
+    ///      means "never transferred" — the effective owner is the original
+    ///      claimant stored in the Claim. This keeps the Claim struct (and so
+    ///      the evidence hash, which commits to the original claimant) intact.
+    mapping(bytes32 => mapping(uint256 => address)) private _owner;
+
+    /// @dev number of times a claim has changed hands (cell => index => count)
+    mapping(bytes32 => mapping(uint256 => uint32)) private _transfers;
+
     /// @dev total number of claims ever staked (for stats / UI)
     uint256 public totalClaims;
 
@@ -49,6 +58,17 @@ contract PlotProof {
         uint256 indexInCell
     );
 
+    /// @notice Emitted when a claim's ownership is handed to a new address
+    ///         (e.g. the plot is sold). Forms the on-chain chain of custody.
+    event ClaimTransferred(
+        bytes32 indexed cell,
+        uint256 indexed indexInCell,
+        address indexed from,
+        address to,
+        uint64 timestamp,
+        uint32 transferCount
+    );
+
     // ---------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------
@@ -57,6 +77,9 @@ contract PlotProof {
     error EmptyEvidenceHash();
     error NoteTooLong();
     error InvalidCoordinates();
+    error ClaimIndexOutOfRange();
+    error NotClaimOwner();
+    error InvalidRecipient();
 
     // ---------------------------------------------------------------
     // Write
@@ -112,6 +135,32 @@ contract PlotProof {
         );
     }
 
+    /// @notice Transfer ownership of a claim to a new address — e.g. when the
+    ///         plot is sold. Only the current owner may transfer. This records
+    ///         a verifiable chain of custody, so a legitimate sale becomes a
+    ///         linked A -> B trail rather than looking like a double sale.
+    /// @param cell   The claim's geohash cell.
+    /// @param index  The claim's index within the cell (see getClaimsBatch).
+    /// @param to     The new owner (e.g. the buyer's wallet).
+    function transferClaim(bytes32 cell, uint256 index, address to) external {
+        Claim[] storage arr = _claimsByCell[cell];
+        if (index >= arr.length) revert ClaimIndexOutOfRange();
+
+        address current = _owner[cell][index];
+        if (current == address(0)) current = arr[index].claimant;
+
+        if (current != msg.sender) revert NotClaimOwner();
+        if (to == address(0) || to == current) revert InvalidRecipient();
+
+        _owner[cell][index] = to;
+        uint32 count;
+        unchecked {
+            count = ++_transfers[cell][index];
+        }
+
+        emit ClaimTransferred(cell, index, current, to, uint64(block.timestamp), count);
+    }
+
     // ---------------------------------------------------------------
     // Read
     // ---------------------------------------------------------------
@@ -119,6 +168,24 @@ contract PlotProof {
     /// @notice All claims staked on a single cell.
     function getClaims(bytes32 cell) external view returns (Claim[] memory) {
         return _claimsByCell[cell];
+    }
+
+    /// @notice Current owner of a claim (the original claimant unless the
+    ///         claim has been transferred).
+    function ownerOf(bytes32 cell, uint256 index) public view returns (address) {
+        Claim[] storage arr = _claimsByCell[cell];
+        if (index >= arr.length) revert ClaimIndexOutOfRange();
+        address o = _owner[cell][index];
+        return o == address(0) ? arr[index].claimant : o;
+    }
+
+    /// @notice How many times a claim has changed hands.
+    function transferCountOf(bytes32 cell, uint256 index)
+        external
+        view
+        returns (uint32)
+    {
+        return _transfers[cell][index];
     }
 
     /// @notice Number of claims on a single cell (cheap conflict check).
@@ -146,7 +213,12 @@ contract PlotProof {
     function getClaimsBatch(bytes32[] calldata cells)
         external
         view
-        returns (bytes32[] memory cellOf, Claim[] memory claims)
+        returns (
+            bytes32[] memory cellOf,
+            uint256[] memory idxOf,
+            address[] memory ownerOf_,
+            Claim[] memory claims
+        )
     {
         uint256 total;
         for (uint256 i = 0; i < cells.length; i++) {
@@ -154,13 +226,19 @@ contract PlotProof {
         }
 
         cellOf = new bytes32[](total);
+        idxOf = new uint256[](total);
+        ownerOf_ = new address[](total);
         claims = new Claim[](total);
 
         uint256 k;
         for (uint256 i = 0; i < cells.length; i++) {
-            Claim[] storage arr = _claimsByCell[cells[i]];
+            bytes32 cell = cells[i];
+            Claim[] storage arr = _claimsByCell[cell];
             for (uint256 j = 0; j < arr.length; j++) {
-                cellOf[k] = cells[i];
+                cellOf[k] = cell;
+                idxOf[k] = j;
+                address o = _owner[cell][j];
+                ownerOf_[k] = o == address(0) ? arr[j].claimant : o;
                 claims[k] = arr[j];
                 unchecked {
                     k++;
