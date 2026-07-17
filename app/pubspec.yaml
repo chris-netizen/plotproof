@@ -18,6 +18,31 @@ dependencies:
   latlong2: ^0.9.1
   path_provider: ^2.1.3
   intl: ^0.19.0
+  google_fonts: ^6.2.1
+  url_launcher: ^6.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.1
+  flutter_native_splash: ^2.4.1
 
 flutter:
   uses-material-design: true
+
+# App icon generation (run: dart run flutter_launcher_icons)
+flutter_launcher_icons:
+  android: true
+  web:
+    generate: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#0F5A34"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+
+# Splash screen generation (run: dart run flutter_native_splash:create)
+flutter_native_splash:
+  color: "#0F5A34"
+  image: assets/icon/splash_logo.png
+  android_12:
+    color: "#0F5A34"
+    image: assets/icon/splash_logo.png
