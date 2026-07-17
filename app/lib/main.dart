@@ -74,11 +74,13 @@ class _HomeState extends State<_Home> {
           children: [
             const BrandMark(size: 30),
             const SizedBox(width: 10),
-            Text('PlotProof',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w800)),
+            Text(
+              'PlotProof',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
           ],
         ),
         actions: [

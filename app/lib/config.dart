@@ -18,4 +18,7 @@ class ChainConfig {
 
   /// Block explorer base URL for linking to txs (from docs.monad.xyz).
   static const String explorerTxBase = 'https://testnet.monadexplorer.com/tx/';
+
+  /// Faucet for funding the in-app wallet with testnet MON (for gas).
+  static const String faucetUrl = 'https://faucet.monad.xyz/';
 }

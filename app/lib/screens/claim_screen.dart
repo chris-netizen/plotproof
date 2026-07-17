@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -38,6 +38,16 @@ class _ClaimScreenState extends State<ClaimScreen> {
   String? _status;
   String? _txHash;
   bool _busy = false;
+  bool _needsFunds = false;
+  String? _addr;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.wallet.address().then((a) {
+      if (mounted) setState(() => _addr = a.hexEip55);
+    });
+  }
 
   @override
   void dispose() {
@@ -77,6 +87,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
     if (_photo == null || _pos == null) return;
     setState(() {
       _busy = true;
+      _needsFunds = false;
       _status = 'Hashing evidence…';
     });
 
@@ -135,7 +146,15 @@ class _ClaimScreenState extends State<ClaimScreen> {
       widget.onStaked?.call();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _status = 'Failed: $e');
+      final s = e.toString().toLowerCase();
+      final insufficient =
+          s.contains('insufficient funds') || s.contains('-32003');
+      setState(() {
+        _needsFunds = insufficient;
+        _status = insufficient
+            ? 'Your PlotProof wallet has no testnet MON to pay for gas.'
+            : 'Failed: $e';
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -147,6 +166,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
       _pos = null;
       _txHash = null;
       _status = null;
+      _needsFunds = false;
       _noteCtrl.clear();
     });
   }
@@ -169,14 +189,18 @@ class _ClaimScreenState extends State<ClaimScreen> {
               const Text(
                 'Stand on the plot. PlotProof anchors your photo, GPS and the '
                 'time to Monad — permanently.',
-                style: TextStyle(fontSize: 14, height: 1.45, color: AppColors.inkSoft),
+                style: TextStyle(
+                    fontSize: 14, height: 1.45, color: AppColors.inkSoft),
               ),
               const SizedBox(height: 20),
               if (_photo != null && _pos != null)
                 _capturedView(context)
               else
                 _capturePrompt(),
-              if (_status != null && _txHash == null) ...[
+              if (_needsFunds) ...[
+                const SizedBox(height: 16),
+                _FundingCard(addr: _addr),
+              ] else if (_status != null && _txHash == null) ...[
                 const SizedBox(height: 16),
                 _StatusLine(text: _status!, busy: _busy),
               ],
@@ -216,7 +240,8 @@ class _ClaimScreenState extends State<ClaimScreen> {
             'Take a photo while standing on the plot. Your device location and '
             'the current time are captured with it.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13.5, height: 1.45, color: AppColors.inkSoft),
+            style: TextStyle(
+                fontSize: 13.5, height: 1.45, color: AppColors.inkSoft),
           ),
           const SizedBox(height: 20),
           FilledButton.icon(
@@ -355,7 +380,10 @@ class _StatusLine extends StatelessWidget {
                 height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2))
           else
-            Icon(isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+            Icon(
+                isError
+                    ? Icons.error_outline_rounded
+                    : Icons.info_outline_rounded,
                 size: 18,
                 color: isError ? AppColors.danger : AppColors.brand),
           const SizedBox(width: 10),
@@ -365,6 +393,102 @@ class _StatusLine extends StatelessWidget {
                     fontSize: 13.5,
                     color: isError ? AppColors.danger : AppColors.brand,
                     fontWeight: FontWeight.w500)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FundingCard extends StatelessWidget {
+  final String? addr;
+  const _FundingCard({this.addr});
+
+  @override
+  Widget build(BuildContext context) {
+    final short = addr == null
+        ? null
+        : '${addr!.substring(0, 10)}…${addr!.substring(addr!.length - 8)}';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.warningBg,
+        borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.account_balance_wallet_rounded,
+                  color: AppColors.warning, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Wallet needs testnet MON',
+                        style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.ink)),
+                    const SizedBox(height: 3),
+                    const Text(
+                      'Staking a claim costs a little gas. Fund your PlotProof '
+                      'wallet once from the free Monad faucet, then try again.',
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          height: 1.4,
+                          color: AppColors.inkSoft),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (short != null) ...[
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: addr!));
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Wallet address copied'),
+                    duration: Duration(seconds: 2)));
+              },
+              borderRadius: BorderRadius.circular(AppRadii.control),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppRadii.control),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(short,
+                          style: const TextStyle(
+                              fontFeatures: [FontFeature.tabularFigures()],
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.ink)),
+                    ),
+                    const Icon(Icons.copy_rounded,
+                        size: 16, color: AppColors.inkSoft),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: () => launchUrl(Uri.parse(ChainConfig.faucetUrl),
+                mode: LaunchMode.externalApplication),
+            icon: const Icon(Icons.water_drop_rounded),
+            label: const Text('Get testnet MON'),
           ),
         ],
       ),
@@ -386,7 +510,8 @@ class _SuccessCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final short = '${txHash.substring(0, 10)}…${txHash.substring(txHash.length - 8)}';
+    final short =
+        '${txHash.substring(0, 10)}…${txHash.substring(txHash.length - 8)}';
     return Column(
       children: [
         const SizedBox(height: 12),
