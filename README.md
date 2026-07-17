@@ -1,66 +1,123 @@
-## Foundry
+# PlotProof
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+**A tamper-proof, geo-anchored "first claim" ledger for land. Check before you pay.**
 
-Foundry consists of:
+PlotProof lets anyone stand on a plot of land, capture a photo + GPS + timestamp, and
+anchor a proof of that inspection to the [Monad](https://monad.xyz) blockchain — permanently
+and publicly. Before buying, a second buyer, agent, or lawyer can query the exact location and
+instantly see whether the plot has already been claimed by someone else.
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+> Built solo for the **BuildAnything "Spark" hackathon** on Monad.
 
-## Documentation
+---
 
-https://book.getfoundry.sh/
+## The problem
 
-## Usage
+Land fraud in Nigeria is estimated to cost the economy around **$4 billion a year**. The root
+cause is documentation: **less than 10% of land is formally registered**, so the same plot can be
+sold to several buyers who have no shared, trustworthy way to discover each other. By the time a
+"double sale" surfaces, the money is gone.
 
-### Build
+There is no cheap, public, tamper-proof place to record *"someone already inspected and claimed
+this exact spot, on this date, with this evidence."* PlotProof is that place.
 
-```shell
-$ forge build
+## How it works
+
+1. **Stake a claim** — standing on the plot, the app captures a photo and reads GPS + time. It
+   computes `keccak256(photo ‖ lat ‖ lng ‖ timestamp ‖ your address)` and writes that hash, the
+   coordinates, and a geocell id to the contract in a single Monad transaction. The photo itself
+   never leaves the device — only its hash goes on-chain, so the evidence is provable without
+   being exposed.
+2. **Check a plot** — before paying, tap the plot on a map. The app snaps the point to a geohash
+   cell, queries that cell **and its 8 neighbours** (so a plot straddling a boundary still
+   surfaces), and lists every prior claim. **Claims from more than one address on the same spot
+   raise a conflict warning — a possible double sale.**
+3. **Verify evidence** — because the hashing scheme is canonical and public, a claimant can later
+   re-hash their original photo + metadata and prove on-chain that *that* evidence existed at
+   claim time.
+
+## Live deployment
+
+| | |
+|---|---|
+| **Network** | Monad testnet (chain id `10143`) |
+| **Contract** | [`0x145c75CBccF30FF9c40091cf424e6945A7545CA1`](https://testnet.monadexplorer.com/address/0x145c75CBccF30FF9c40091cf424e6945A7545CA1) |
+| **Source** | [`contracts/PlotProof.sol`](contracts/PlotProof.sol) |
+
+## Architecture
+
+```
+Flutter app (Dart)                         Monad testnet
+──────────────────                         ─────────────
+Claim screen  ─ photo+GPS ─► keccak256 ──► stakeClaim(cell, hash, latE7, lngE7, note)
+Check screen  ─ map tap    ─► geocell  ──► getClaimsBatch(cells[9]) ──► conflict view
+                                           claimCounts / hasEvidence
 ```
 
-### Test
+**Contract** ([`PlotProof.sol`](contracts/PlotProof.sol)) — a Solidity claim ledger indexed by
+`bytes32` geohash cell. `stakeClaim` appends a `Claim{claimant, evidenceHash, latE7, lngE7,
+timestamp, note}`; `getClaimsBatch` / `claimCounts` read a whole 9-cell block in one RPC round
+trip; `hasEvidence` supports later verification. Coordinates are validated on-chain and notes are
+length-bounded to keep costs down.
 
-```shell
-$ forge test
+**App** (`app/lib/`)
+- `geocell.dart` — pure-Dart geohash encode/decode + neighbour math; encodes a cell as ASCII
+  bytes right-padded into `bytes32` (trivially reproducible in any language, cheap to compare
+  on-chain). Default precision 8 ≈ a plot-sized ~38×19 m cell.
+- `evidence.dart` — the canonical evidence-hash byte layout, fixed forever so claims stay
+  verifiable.
+- `services/chain_service.dart` — `web3dart` binding to the contract (read + write).
+- `services/wallet_service.dart` — in-app burner wallet, private key generated on first launch
+  and held in the platform secure storage/keystore.
+- `screens/` — `check_screen.dart` (map-based conflict check, the hero flow) and
+  `claim_screen.dart` (capture → hash → stake).
+
+## Tech stack
+
+Flutter · Dart · web3dart · Solidity 0.8.24 · Foundry · Monad · OpenStreetMap (flutter_map) ·
+geolocator · image_picker
+
+## Run it
+
+### Mobile app (Android)
+
+```bash
+cd app
+flutter pub get
+flutter build apk --release
+# output: build/app/outputs/flutter-apk/app-release.apk
 ```
 
-### Format
+Install the APK on an Android device, then fund the wallet address it shows (top-right of the app)
+from a [Monad testnet faucet](https://docs.monad.xyz) before staking a claim.
 
-```shell
-$ forge fmt
+> On a machine where the project and the Flutter/pub cache live on **different drives**, the Kotlin
+> incremental compiler can fail on a cross-root path. This repo already sets
+> `kotlin.incremental=false` in `app/android/gradle.properties` to avoid it.
+
+### Web (optional)
+
+```bash
+cd app
+flutter build web        # serve build/web with any static server
 ```
 
-### Gas Snapshots
+### Contract
 
-```shell
-$ forge snapshot
+```bash
+forge build
+forge script contracts/Deploy.s.sol --rpc-url https://testnet-rpc.monad.xyz --private-key <key> --broadcast
 ```
 
-### Anvil
+## Repository layout
 
-```shell
-$ anvil
+```
+contracts/        PlotProof.sol + Deploy.s.sol (Foundry)
+app/              Flutter app
+  lib/            geocell, evidence, chain/wallet services, screens
+foundry.toml      Foundry config
 ```
 
-### Deploy
+## License
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+MIT
