@@ -1,7 +1,7 @@
 import { createPublicClient, defineChain, http } from "viem";
 
 export const CONTRACT_ADDRESS = (process.env.PLOTPROOF_CONTRACT ??
-  "0xD53EBd6F4AF19D43F468c9c4434310f190e4e0D4") as `0x${string}`;
+  "0x0e568Fb730D1Ce4b79c9200d516a872C1Aeda6F2") as `0x${string}`;
 
 export const RPC_URL =
   process.env.PLOTPROOF_RPC_URL ?? "https://testnet-rpc.monad.xyz";
