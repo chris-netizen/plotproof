@@ -124,10 +124,20 @@ forge script contracts/Deploy.s.sol --rpc-url https://testnet-rpc.monad.xyz --pr
 
 ```
 contracts/        PlotProof.sol + Deploy.s.sol (Foundry)
-app/              Flutter app
+app/              Flutter app (staking, selling, checking)
   lib/            geocell, evidence, chain/wallet services, screens
+web/              Next.js public dashboard (deploys to Vercel)
 foundry.toml      Foundry config
 ```
+
+## Public dashboard
+
+A separate, wallet-free web app in [`web/`](web/) reads the same contract and
+shows **every claim on a live map**, with sales tracked, conflicts flagged, an
+activity feed, and a "check this plot" search — the shareable, verifiable face
+of the registry. It reads the chain server-side (via Next.js on Vercel) so
+there are no browser-RPC/CORS issues. See [web/README.md](web/README.md) to run
+or deploy it.
 
 ## License
 
