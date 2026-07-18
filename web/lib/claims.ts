@@ -340,7 +340,9 @@ async function build(): Promise<ClaimsData> {
     plots,
     activity,
     analytics: {
-      totalPlots: plots.length,
+      // Prefer the contract's own count so the headline is right even when a
+      // rate-limited public RPC can't index the full history in time.
+      totalPlots: Math.max(plots.length, onChainTotal > 0 ? onChainTotal : 0),
       totalSales: transferLogs.length,
       conflicts,
       owners,

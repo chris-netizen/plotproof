@@ -112,6 +112,10 @@ a:hover {
 .header-links a {
   color: var(--ink-soft);
 }
+/* The GitHub button is an <a> inside .header-links; keep its label white. */
+.header-links a.btn-primary {
+  color: #fff;
+}
 
 /* Hero */
 .hero {
