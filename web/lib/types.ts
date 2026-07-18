@@ -66,5 +66,6 @@ export type ClaimsData = {
     fromBlock: number;
     onChainTotal: number; // contract's totalClaims (-1 if the read failed)
     foundStaked: number; // ClaimStaked events the scan actually found
+    stakedError: string | null; // first getLogs error, if any
   };
 };

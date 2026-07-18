@@ -37,7 +37,7 @@ async function getLogsChunked(
   fromBlock: bigint,
   toBlock: bigint,
   deadline: number,
-): Promise<DecodedLog[]> {
+): Promise<{ logs: DecodedLog[]; sampleError?: string }> {
   // Build windows newest-first so recent claims come back first.
   const windows: Array<[bigint, bigint]> = [];
   let end = toBlock;
@@ -49,6 +49,7 @@ async function getLogsChunked(
   }
 
   const out: DecodedLog[] = [];
+  let sampleError: string | undefined;
   for (let i = 0; i < windows.length; i += CONCURRENCY) {
     if (Date.now() > deadline) break; // don't blow the function timeout
     const batch = windows.slice(i, i + CONCURRENCY);
@@ -56,13 +57,19 @@ async function getLogsChunked(
       batch.map(([s, e]) =>
         client
           .getLogs({ address: CONTRACT_ADDRESS, event, fromBlock: s, toBlock: e })
-          .then((l) => l as unknown as DecodedLog[])
-          .catch(() => [] as DecodedLog[]),
+          .then((l) => ({ logs: l as unknown as DecodedLog[] }))
+          .catch((err: unknown) => ({
+            logs: [] as DecodedLog[],
+            error: err instanceof Error ? err.message : String(err),
+          })),
       ),
     );
-    for (const r of results) out.push(...r);
+    for (const r of results) {
+      out.push(...r.logs);
+      if ("error" in r && r.error && !sampleError) sampleError = r.error;
+    }
   }
-  return out;
+  return { logs: out, sampleError };
 }
 
 function short(addr: string) {
@@ -74,12 +81,8 @@ async function build(): Promise<ClaimsData> {
   // Global time budget so we never blow a serverless function timeout.
   const deadline = Date.now() + 9_000;
   const latest = await client.getBlockNumber();
-  const fromBlock =
-    DEPLOY_BLOCK > 0n
-      ? DEPLOY_BLOCK
-      : latest > DEFAULT_LOOKBACK
-        ? latest - DEFAULT_LOOKBACK
-        : 0n;
+  const wideFrom = latest > DEFAULT_LOOKBACK ? latest - DEFAULT_LOOKBACK : 0n;
+  let fromBlock = DEPLOY_BLOCK > 0n ? DEPLOY_BLOCK : wideFrom;
 
   // The contract's own claim count — a sanity signal independent of log scans.
   let onChainTotal = 0;
@@ -94,16 +97,40 @@ async function build(): Promise<ClaimsData> {
     onChainTotal = -1; // read failed
   }
 
-  const [stakedLogs, transferLogs] = await Promise.all([
-    getLogsChunked(client, CLAIM_STAKED as AbiEvent, fromBlock, latest, deadline),
-    getLogsChunked(
+  let stakedRes = await getLogsChunked(
+    client,
+    CLAIM_STAKED as AbiEvent,
+    fromBlock,
+    latest,
+    deadline,
+  );
+
+  // Self-heal: if the contract reports more claims than we found, the deploy
+  // block was probably set too high — widen the window and rescan.
+  if (
+    onChainTotal > 0 &&
+    stakedRes.logs.length < onChainTotal &&
+    wideFrom < fromBlock
+  ) {
+    fromBlock = wideFrom;
+    stakedRes = await getLogsChunked(
       client,
-      CLAIM_TRANSFERRED as AbiEvent,
+      CLAIM_STAKED as AbiEvent,
       fromBlock,
       latest,
       deadline,
-    ),
-  ]);
+    );
+  }
+
+  const transferRes = await getLogsChunked(
+    client,
+    CLAIM_TRANSFERRED as AbiEvent,
+    fromBlock,
+    latest,
+    deadline,
+  );
+  const stakedLogs = stakedRes.logs;
+  const transferLogs = transferRes.logs;
 
   // Unique cells (bytes32 hex) discovered from stake events.
   const cellHexes = Array.from(
@@ -313,6 +340,7 @@ async function build(): Promise<ClaimsData> {
       fromBlock: Number(fromBlock),
       onChainTotal,
       foundStaked: stakedLogs.length,
+      stakedError: stakedRes.sampleError ?? null,
     },
   };
 }
