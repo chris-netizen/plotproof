@@ -16,19 +16,31 @@ class WalletService {
   static const _storage = FlutterSecureStorage();
 
   EthPrivateKey? _credentials;
+  Future<EthPrivateKey>? _loading; // shared so concurrent callers don't race
 
   /// Load the wallet, creating one on first run.
-  Future<EthPrivateKey> load() async {
-    if (_credentials != null) return _credentials!;
+  ///
+  /// Concurrent callers (e.g. the wallet pill and the claim screen loading at
+  /// the same time) must share a single create-or-read operation — otherwise
+  /// each would generate a different key and the app would show two wallets.
+  Future<EthPrivateKey> load() {
+    if (_credentials != null) return Future.value(_credentials!);
+    return _loading ??= _loadOrCreate();
+  }
 
-    var hex = await _storage.read(key: _kKey);
-    if (hex == null) {
-      final key = EthPrivateKey.createRandom(Random.secure());
-      hex = bytesToHex(key.privateKey, include0x: true);
-      await _storage.write(key: _kKey, value: hex);
+  Future<EthPrivateKey> _loadOrCreate() async {
+    try {
+      var hex = await _storage.read(key: _kKey);
+      if (hex == null) {
+        final key = EthPrivateKey.createRandom(Random.secure());
+        hex = bytesToHex(key.privateKey, include0x: true);
+        await _storage.write(key: _kKey, value: hex);
+      }
+      _credentials = EthPrivateKey.fromHex(hex);
+      return _credentials!;
+    } finally {
+      _loading = null;
     }
-    _credentials = EthPrivateKey.fromHex(hex);
-    return _credentials!;
   }
 
   Future<EthereumAddress> address() async => (await load()).address;
