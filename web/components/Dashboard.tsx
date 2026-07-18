@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
-import { cellBlock } from "@/lib/geocell";
 import { coord, fullDate, shortAddr, timeAgo } from "@/lib/format";
 import type { Activity, ClaimsData, Plot } from "@/lib/types";
 
@@ -12,6 +11,8 @@ const PlotsMap = dynamic(() => import("./PlotsMap"), {
 });
 
 type CheckResult =
+  | { kind: "loading" }
+  | { kind: "error" }
   | { kind: "none" }
   | { kind: "single"; owner: string }
   | { kind: "conflict"; count: number }
@@ -27,11 +28,21 @@ export default function Dashboard({ data }: { data: ClaimsData }) {
   } | null>(null);
   const [checkResult, setCheckResult] = useState<CheckResult>(null);
   const [checkInput, setCheckInput] = useState("");
+  // Plots discovered via the Check endpoint (works even if the index is empty).
+  const [checkedPlots, setCheckedPlots] = useState<Plot[]>([]);
 
   const filtered = useMemo(
     () => (region ? plots.filter((p) => p.cell.startsWith(region)) : plots),
     [plots, region],
   );
+
+  const mapPlots = useMemo(() => {
+    const seen = new Set(filtered.map((p) => `${p.cellHex}:${p.index}`));
+    const extra = checkedPlots.filter(
+      (p) => !seen.has(`${p.cellHex}:${p.index}`),
+    );
+    return [...filtered, ...extra];
+  }, [filtered, checkedPlots]);
 
   const shownActivity = useMemo(() => {
     const list: Activity[] = region
@@ -42,19 +53,30 @@ export default function Dashboard({ data }: { data: ClaimsData }) {
     return list.slice(0, 40);
   }, [activity, filtered, region]);
 
-  function runCheck(lat: number, lng: number) {
+  async function runCheck(lat: number, lng: number) {
     setCheckPoint({ lat, lng });
-    const cells = new Set(cellBlock(lat, lng));
-    const here = plots.filter((p) => cells.has(p.cell));
-    if (here.length === 0) {
-      setCheckResult({ kind: "none" });
-      return;
-    }
-    const claimants = new Set(here.map((p) => p.claimant.toLowerCase()));
-    if (claimants.size > 1) {
-      setCheckResult({ kind: "conflict", count: here.length });
-    } else {
-      setCheckResult({ kind: "single", owner: here[0].owner });
+    setCheckResult({ kind: "loading" });
+    try {
+      const r = await fetch(`/api/check?lat=${lat}&lng=${lng}`);
+      const data = await r.json();
+      if (!data.ok) {
+        setCheckResult({ kind: "error" });
+        return;
+      }
+      const found = (data.plots ?? []) as Plot[];
+      if (found.length) {
+        setCheckedPlots((prev) => {
+          const seen = new Set(prev.map((p) => `${p.cellHex}:${p.index}`));
+          const add = found.filter((p) => !seen.has(`${p.cellHex}:${p.index}`));
+          return [...prev, ...add];
+        });
+      }
+      if (data.status === "none") setCheckResult({ kind: "none" });
+      else if (data.status === "conflict")
+        setCheckResult({ kind: "conflict", count: data.count });
+      else setCheckResult({ kind: "single", owner: found[0].owner });
+    } catch {
+      setCheckResult({ kind: "error" });
     }
   }
 
@@ -99,7 +121,7 @@ export default function Dashboard({ data }: { data: ClaimsData }) {
         <div className="card" style={{ overflow: "hidden" }}>
           <div className="map-wrap">
             <PlotsMap
-              plots={filtered}
+              plots={mapPlots}
               selectedCell={selectedCell}
               checkPoint={checkPoint}
               onSelectPlot={setSelected}
@@ -152,9 +174,14 @@ export default function Dashboard({ data }: { data: ClaimsData }) {
               {checkResult && (
                 <div
                   className={`check-result ${
-                    checkResult.kind === "conflict" ? "warn" : "ok"
+                    checkResult.kind === "conflict" || checkResult.kind === "error"
+                      ? "warn"
+                      : "ok"
                   }`}
                 >
+                  {checkResult.kind === "loading" && "Checking on-chain…"}
+                  {checkResult.kind === "error" &&
+                    "Couldn’t check right now — please try again."}
                   {checkResult.kind === "none" &&
                     "✓ No claim on record for this spot yet."}
                   {checkResult.kind === "single" && (
