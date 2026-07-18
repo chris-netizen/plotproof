@@ -61,4 +61,10 @@ export type ClaimsData = {
   plots: Plot[];
   activity: Activity[];
   analytics: Analytics;
+  debug?: {
+    latestBlock: number;
+    fromBlock: number;
+    onChainTotal: number; // contract's totalClaims (-1 if the read failed)
+    foundStaked: number; // ClaimStaked events the scan actually found
+  };
 };

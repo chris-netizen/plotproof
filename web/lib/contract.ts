@@ -86,4 +86,13 @@ export const GET_CLAIMS_BATCH = {
   ],
 } as const;
 
-export const ABI = [GET_CLAIMS_BATCH] as const;
+/** totalClaims — the contract's own count, for a sanity signal. */
+export const TOTAL_CLAIMS = {
+  type: "function",
+  name: "totalClaims",
+  stateMutability: "view",
+  inputs: [],
+  outputs: [{ name: "", type: "uint256" }],
+} as const;
+
+export const ABI = [GET_CLAIMS_BATCH, TOTAL_CLAIMS] as const;

@@ -32,13 +32,15 @@ async function getLogsChunked(
   toBlock: bigint,
   deadline: number,
 ): Promise<DecodedLog[]> {
+  // Scan NEWEST-first so recent claims are found within the time budget even
+  // when the deploy block is unknown and the window is large.
   const out: DecodedLog[] = [];
   let chunk = 50_000n;
-  let start = fromBlock;
+  let end = toBlock;
   let guard = 0;
-  while (start <= toBlock && guard++ < 400) {
+  while (end >= fromBlock && guard++ < 400) {
     if (Date.now() > deadline) break; // don't blow the function timeout
-    const end = start + chunk > toBlock ? toBlock : start + chunk;
+    const start = end - chunk + 1n < fromBlock ? fromBlock : end - chunk + 1n;
     try {
       const logs = await client.getLogs({
         address: CONTRACT_ADDRESS,
@@ -47,12 +49,12 @@ async function getLogsChunked(
         toBlock: end,
       });
       out.push(...(logs as unknown as DecodedLog[]));
-      start = end + 1n;
+      end = start - 1n;
       if (chunk < 50_000n) chunk *= 2n; // recover after a shrink
     } catch {
       if (chunk <= 1_000n) {
         // Can't go smaller; skip this window rather than fail the whole page.
-        start = end + 1n;
+        end = start - 1n;
       } else {
         chunk /= 2n; // RPC range too big — retry smaller
       }
@@ -76,6 +78,19 @@ async function build(): Promise<ClaimsData> {
       : latest > DEFAULT_LOOKBACK
         ? latest - DEFAULT_LOOKBACK
         : 0n;
+
+  // The contract's own claim count — a sanity signal independent of log scans.
+  let onChainTotal = 0;
+  try {
+    const t = (await client.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: ABI,
+      functionName: "totalClaims",
+    })) as bigint;
+    onChainTotal = Number(t);
+  } catch {
+    onChainTotal = -1; // read failed
+  }
 
   const [stakedLogs, transferLogs] = await Promise.all([
     getLogsChunked(client, CLAIM_STAKED as AbiEvent, fromBlock, latest, deadline),
@@ -290,6 +305,12 @@ async function build(): Promise<ClaimsData> {
       owners,
       byDay,
       regions,
+    },
+    debug: {
+      latestBlock: Number(latest),
+      fromBlock: Number(fromBlock),
+      onChainTotal,
+      foundStaked: stakedLogs.length,
     },
   };
 }
