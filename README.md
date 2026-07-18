@@ -23,11 +23,12 @@ this exact spot, on this date, with this evidence."* PlotProof is that place.
 
 ## How it works
 
-1. **Stake a claim** — standing on the plot, the app captures a photo and reads GPS + time. It
-   computes `keccak256(photo ‖ lat ‖ lng ‖ timestamp ‖ your address)` and writes that hash, the
-   coordinates, and a geocell id to the contract in a single Monad transaction. The photo itself
-   never leaves the device — only its hash goes on-chain, so the evidence is provable without
-   being exposed.
+1. **Stake a claim** — standing on the plot, the app captures a photo and reads GPS + time, and you
+   can optionally attach **supporting documents** (title / survey plan / receipt). It computes
+   `keccak256(photo ‖ lat ‖ lng ‖ timestamp ‖ your address ‖ documents)` and writes that hash, the
+   coordinates, and a geocell id to the contract in a single Monad transaction. The photo and
+   documents never leave the device — only their hash goes on-chain, so the evidence is provable
+   (and tamper-evident) without being exposed.
 2. **Check a plot** — before paying, tap the plot on a map. The app snaps the point to a geohash
    cell, queries that cell **and its 8 neighbours** (so a plot straddling a boundary still
    surfaces), and lists every prior claim. **Claims from more than one address on the same spot

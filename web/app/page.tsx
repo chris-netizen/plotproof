@@ -130,7 +130,7 @@ export default async function Home() {
             <Step
               n={1}
               title="Stake a claim"
-              body="Standing on the plot, the owner captures a photo, GPS and time. A hash of that evidence is written to Monad — permanent and public."
+              body="Standing on the plot, the owner captures a photo, GPS and time — plus optional title/survey documents. A hash of that evidence is anchored on Monad, tamper-evident and public."
             />
             <Step
               n={2}

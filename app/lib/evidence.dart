@@ -10,14 +10,20 @@
 ///  || lngE7  as int64  big-endian      // 8 bytes, two's complement
 ///  || tsUnix as uint64 big-endian      // 8 bytes (device time at capture)
 ///  || claimant address                 // 20 bytes
+///  || docsRoot                          // 32 bytes (see [documentsRoot];
+///                                       //   all-zero when no documents)
 /// )
+///
+/// The docsRoot lets a claimant attach supporting documents (title / survey
+/// plan / receipt). Only the hash is anchored on-chain, so the documents stay
+/// private but can later be proven to have existed, unaltered, at claim time.
 ///
 /// Requires: web3dart (for keccak256 + EthereumAddress).
 library evidence;
 
 import 'dart:typed_data';
 
-import 'package:web3dart/crypto.dart' show keccak256;
+import 'package:web3dart/crypto.dart' show bytesToHex, keccak256;
 import 'package:web3dart/web3dart.dart' show EthereumAddress;
 
 /// Convert a double coordinate to its E7 fixed-point int (matches the
@@ -36,6 +42,25 @@ Uint8List _uint64BE(int value) {
   return b.buffer.asUint8List();
 }
 
+/// keccak256 of arbitrary bytes (e.g. one document file).
+Uint8List hashBytes(Uint8List bytes) => keccak256(bytes);
+
+/// 0x-prefixed hex of keccak256(bytes) — handy for storing a document's
+/// fingerprint in the sidecar.
+String hashHex(Uint8List bytes) => '0x${bytesToHex(keccak256(bytes))}';
+
+/// Combine per-document hashes into a single 32-byte root.
+/// Returns 32 zero bytes when there are no documents (so the evidence hash
+/// is still well-defined for a photo-only claim).
+Uint8List documentsRoot(List<Uint8List> docHashes) {
+  if (docHashes.isEmpty) return Uint8List(32);
+  final bb = BytesBuilder(copy: false);
+  for (final h in docHashes) {
+    bb.add(h);
+  }
+  return keccak256(bb.takeBytes());
+}
+
 /// Build the canonical evidence hash for a claim.
 ///
 /// [photoBytes]   raw bytes of the captured photo file
@@ -43,20 +68,38 @@ Uint8List _uint64BE(int value) {
 /// [tsUnixSecs]   capture time, unix seconds (store this locally with
 ///                the photo — you need it again to verify later)
 /// [claimant]     the wallet address staking the claim
+/// [docsRoot]     32-byte root over any attached documents (use
+///                [documentsRoot]; pass all-zero for none)
 Uint8List evidenceHash({
   required Uint8List photoBytes,
   required int latE7,
   required int lngE7,
   required int tsUnixSecs,
   required EthereumAddress claimant,
+  required Uint8List docsRoot,
 }) {
   final builder = BytesBuilder(copy: false)
     ..add(photoBytes)
     ..add(_int64BE(latE7))
     ..add(_int64BE(lngE7))
     ..add(_uint64BE(tsUnixSecs))
-    ..add(claimant.addressBytes);
+    ..add(claimant.addressBytes)
+    ..add(docsRoot);
   return keccak256(builder.takeBytes());
+}
+
+/// A supporting document attached to a claim (title, survey plan, receipt).
+/// Only its [hash] is anchored on-chain; the file itself stays on-device.
+class EvidenceDoc {
+  final String name; // original file name
+  final String hash; // 0x keccak256 of the file bytes
+
+  const EvidenceDoc({required this.name, required this.hash});
+
+  Map<String, dynamic> toJson() => {'name': name, 'hash': hash};
+
+  factory EvidenceDoc.fromJson(Map<String, dynamic> j) =>
+      EvidenceDoc(name: j['name'] as String, hash: j['hash'] as String);
 }
 
 /// Sidecar metadata to save on-device next to each photo, so the
@@ -69,6 +112,7 @@ class EvidenceMeta {
   final String claimant; // 0x address
   final String cell; // geohash string
   final String note;
+  final List<EvidenceDoc> documents;
 
   const EvidenceMeta({
     required this.latE7,
@@ -77,6 +121,7 @@ class EvidenceMeta {
     required this.claimant,
     required this.cell,
     required this.note,
+    this.documents = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -86,7 +131,8 @@ class EvidenceMeta {
         'claimant': claimant,
         'cell': cell,
         'note': note,
-        'v': 1,
+        'documents': documents.map((d) => d.toJson()).toList(),
+        'v': 2,
       };
 
   factory EvidenceMeta.fromJson(Map<String, dynamic> j) => EvidenceMeta(
@@ -96,5 +142,8 @@ class EvidenceMeta {
         claimant: j['claimant'] as String,
         cell: j['cell'] as String,
         note: j['note'] as String,
+        documents: ((j['documents'] as List?) ?? [])
+            .map((e) => EvidenceDoc.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }

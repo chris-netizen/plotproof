@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -40,6 +41,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
   bool _busy = false;
   bool _needsFunds = false;
   String? _addr;
+  final List<PlatformFile> _docs = []; // supporting documents to anchor
 
   @override
   void initState() {
@@ -83,6 +85,27 @@ class _ClaimScreenState extends State<ClaimScreen> {
     }
   }
 
+  Future<void> _pickDocuments() async {
+    try {
+      final res = await FilePicker.pickFiles(
+        allowMultiple: true,
+        withData: true, // we need the bytes to hash them
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp'],
+      );
+      if (res == null) return;
+      setState(() {
+        for (final f in res.files) {
+          if (f.bytes != null) _docs.add(f);
+        }
+      });
+    } catch (e) {
+      setState(() => _status = 'Could not attach documents: $e');
+    }
+  }
+
+  void _removeDoc(int i) => setState(() => _docs.removeAt(i));
+
   Future<void> _submit() async {
     if (_photo == null || _pos == null) return;
     setState(() {
@@ -98,22 +121,36 @@ class _ClaimScreenState extends State<ClaimScreen> {
       final lngE7 = toE7(_pos!.longitude);
       final ts = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
 
+      // Fold any attached documents into the evidence hash.
+      final docHashes = _docs.map((d) => hashBytes(d.bytes!)).toList();
+      final docsRoot = documentsRoot(docHashes);
+
       final hash = evidenceHash(
         photoBytes: Uint8List.fromList(photoBytes),
         latE7: latE7,
         lngE7: lngE7,
         tsUnixSecs: ts,
         claimant: creds.address,
+        docsRoot: docsRoot,
       );
 
       final cellStr = encodeGeohash(_pos!.latitude, _pos!.longitude);
       final cell = cellToBytes32(cellStr);
 
-      // Save photo + sidecar locally so it can be verified later.
+      // Save photo + documents + sidecar locally so it can be verified later.
       try {
         final dir = await getApplicationDocumentsDirectory();
         final base = '${dir.path}/claim_$ts';
         await File('$base.jpg').writeAsBytes(photoBytes);
+
+        final docMeta = <EvidenceDoc>[];
+        for (var i = 0; i < _docs.length; i++) {
+          final d = _docs[i];
+          final ext = (d.extension ?? 'bin').toLowerCase();
+          await File('${base}_doc$i.$ext').writeAsBytes(d.bytes!);
+          docMeta.add(EvidenceDoc(name: d.name, hash: hashHex(d.bytes!)));
+        }
+
         await File('$base.json').writeAsString(jsonEncode(EvidenceMeta(
           latE7: latE7,
           lngE7: lngE7,
@@ -121,6 +158,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
           claimant: creds.address.hexEip55,
           cell: cellStr,
           note: _noteCtrl.text.trim(),
+          documents: docMeta,
         ).toJson()));
       } catch (_) {
         // Non-fatal (e.g. web has no documents dir) — the chain record
@@ -167,6 +205,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
       _txHash = null;
       _status = null;
       _needsFunds = false;
+      _docs.clear();
       _noteCtrl.clear();
     });
   }
@@ -181,7 +220,10 @@ class _ClaimScreenState extends State<ClaimScreen> {
           children: [
             if (_txHash != null)
               _SuccessCard(
-                  txHash: _txHash!, cell: _status ?? '', onAgain: _reset)
+                  txHash: _txHash!,
+                  cell: _status ?? '',
+                  docCount: _docs.length,
+                  onAgain: _reset)
             else ...[
               Text('Stake a claim',
                   style: Theme.of(context).textTheme.headlineSmall),
@@ -301,6 +343,13 @@ class _ClaimScreenState extends State<ClaimScreen> {
           ),
         ),
         const SizedBox(height: 4),
+        _DocumentsSection(
+          docs: _docs,
+          busy: _busy,
+          onAdd: _pickDocuments,
+          onRemove: _removeDoc,
+        ),
+        const SizedBox(height: 16),
         FilledButton.icon(
           onPressed: _busy ? null : _submit,
           icon: _busy
@@ -352,6 +401,117 @@ class _ReceiptRow extends StatelessWidget {
                   color: AppColors.ink)),
         ),
       ],
+    );
+  }
+}
+
+class _DocumentsSection extends StatelessWidget {
+  final List<PlatformFile> docs;
+  final bool busy;
+  final VoidCallback onAdd;
+  final void Function(int) onRemove;
+  const _DocumentsSection({
+    required this.docs,
+    required this.busy,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  String _size(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.folder_copy_rounded,
+                  size: 18, color: AppColors.brand),
+              const SizedBox(width: 8),
+              const Text('Supporting documents',
+                  style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.ink)),
+              const Spacer(),
+              const Text('Optional',
+                  style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Title, survey plan or receipt. The file stays on your phone — only '
+            'its hash is anchored on-chain, so it can be verified later.',
+            style: TextStyle(
+                fontSize: 12.5, height: 1.4, color: AppColors.inkSoft),
+          ),
+          if (docs.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            for (var i = 0; i < docs.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: AppColors.brandTint,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.description_rounded,
+                          size: 18, color: AppColors.brand),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(docs[i].name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.ink)),
+                          Text(_size(docs[i].size),
+                              style: const TextStyle(
+                                  fontSize: 11.5, color: AppColors.inkSoft)),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: busy ? null : () => onRemove(i),
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      color: AppColors.inkSoft,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : onAdd,
+            icon: const Icon(Icons.attach_file_rounded, size: 18),
+            label: Text(docs.isEmpty ? 'Attach documents' : 'Add more'),
+            style:
+                OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(42)),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -499,9 +659,13 @@ class _FundingCard extends StatelessWidget {
 class _SuccessCard extends StatelessWidget {
   final String txHash;
   final String cell;
+  final int docCount;
   final VoidCallback onAgain;
   const _SuccessCard(
-      {required this.txHash, required this.cell, required this.onAgain});
+      {required this.txHash,
+      required this.cell,
+      required this.docCount,
+      required this.onAgain});
 
   Future<void> _openExplorer() async {
     final uri = Uri.parse('${ChainConfig.explorerTxBase}$txHash');
@@ -529,6 +693,30 @@ class _SuccessCard extends StatelessWidget {
         Text('Anchored to Monad on cell $cell',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 14, color: AppColors.inkSoft)),
+        if (docCount > 0) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: AppColors.brandTint,
+              borderRadius: BorderRadius.circular(AppRadii.pill),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.verified_rounded,
+                    size: 16, color: AppColors.brand),
+                const SizedBox(width: 6),
+                Text(
+                    '$docCount supporting ${docCount == 1 ? 'document' : 'documents'} anchored',
+                    style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.brand)),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 20),
         Container(
           padding: const EdgeInsets.all(16),
