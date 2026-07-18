@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -41,7 +40,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
   bool _busy = false;
   bool _needsFunds = false;
   String? _addr;
-  final List<PlatformFile> _docs = []; // supporting documents to anchor
+  final List<_PickedDoc> _docs = []; // supporting document photos to anchor
 
   @override
   void initState() {
@@ -87,20 +86,16 @@ class _ClaimScreenState extends State<ClaimScreen> {
 
   Future<void> _pickDocuments() async {
     try {
-      final res = await FilePicker.pickFiles(
-        allowMultiple: true,
-        withData: true, // we need the bytes to hash them
-        type: FileType.custom,
-        allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp'],
-      );
-      if (res == null) return;
-      setState(() {
-        for (final f in res.files) {
-          if (f.bytes != null) _docs.add(f);
-        }
-      });
+      final imgs = await ImagePicker().pickMultiImage(imageQuality: 90);
+      if (imgs.isEmpty) return;
+      final loaded = <_PickedDoc>[];
+      for (final x in imgs) {
+        loaded.add(_PickedDoc(x.name, await x.readAsBytes()));
+      }
+      if (!mounted) return;
+      setState(() => _docs.addAll(loaded));
     } catch (e) {
-      setState(() => _status = 'Could not attach documents: $e');
+      if (mounted) setState(() => _status = 'Could not attach documents: $e');
     }
   }
 
@@ -122,7 +117,7 @@ class _ClaimScreenState extends State<ClaimScreen> {
       final ts = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
 
       // Fold any attached documents into the evidence hash.
-      final docHashes = _docs.map((d) => hashBytes(d.bytes!)).toList();
+      final docHashes = _docs.map((d) => hashBytes(d.bytes)).toList();
       final docsRoot = documentsRoot(docHashes);
 
       final hash = evidenceHash(
@@ -146,9 +141,9 @@ class _ClaimScreenState extends State<ClaimScreen> {
         final docMeta = <EvidenceDoc>[];
         for (var i = 0; i < _docs.length; i++) {
           final d = _docs[i];
-          final ext = (d.extension ?? 'bin').toLowerCase();
-          await File('${base}_doc$i.$ext').writeAsBytes(d.bytes!);
-          docMeta.add(EvidenceDoc(name: d.name, hash: hashHex(d.bytes!)));
+          final ext = d.name.contains('.') ? d.name.split('.').last : 'jpg';
+          await File('${base}_doc$i.$ext').writeAsBytes(d.bytes);
+          docMeta.add(EvidenceDoc(name: d.name, hash: hashHex(d.bytes)));
         }
 
         await File('$base.json').writeAsString(jsonEncode(EvidenceMeta(
@@ -406,7 +401,7 @@ class _ReceiptRow extends StatelessWidget {
 }
 
 class _DocumentsSection extends StatelessWidget {
-  final List<PlatformFile> docs;
+  final List<_PickedDoc> docs;
   final bool busy;
   final VoidCallback onAdd;
   final void Function(int) onRemove;
@@ -452,8 +447,9 @@ class _DocumentsSection extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Title, survey plan or receipt. The file stays on your phone — only '
-            'its hash is anchored on-chain, so it can be verified later.',
+            'Photos of your title, survey plan or receipt. They stay on your '
+            'phone — only their hash is anchored on-chain, so they can be '
+            'verified later.',
             style: TextStyle(
                 fontSize: 12.5, height: 1.4, color: AppColors.inkSoft),
           ),
@@ -505,8 +501,8 @@ class _DocumentsSection extends StatelessWidget {
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: busy ? null : onAdd,
-            icon: const Icon(Icons.attach_file_rounded, size: 18),
-            label: Text(docs.isEmpty ? 'Attach documents' : 'Add more'),
+            icon: const Icon(Icons.photo_library_rounded, size: 18),
+            label: Text(docs.isEmpty ? 'Attach document photos' : 'Add more'),
             style:
                 OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(42)),
           ),
@@ -759,4 +755,13 @@ class _SuccessCard extends StatelessWidget {
       ],
     );
   }
+}
+
+/// An attached document photo held in memory (name + bytes) so it can be
+/// hashed into the evidence and saved to the sidecar.
+class _PickedDoc {
+  final String name;
+  final Uint8List bytes;
+  const _PickedDoc(this.name, this.bytes);
+  int get size => bytes.length;
 }
