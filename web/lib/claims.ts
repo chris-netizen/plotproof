@@ -24,7 +24,13 @@ type DecodedLog = {
   blockNumber: bigint | null;
 };
 
-/** getLogs across a big range, chunked and adaptively resized on RPC limits. */
+// Monad testnet caps eth_getLogs at 1000 blocks/request and recommends small
+// ranges with high concurrency. Stay safely under the cap and parallelise.
+const LOG_RANGE = 900n;
+const CONCURRENCY = 6;
+
+/** getLogs across a range using valid <=1000-block windows, newest-first,
+ *  with bounded concurrency and a time budget. */
 async function getLogsChunked(
   client: ReturnType<typeof publicClient>,
   event: AbiEvent,
@@ -32,33 +38,29 @@ async function getLogsChunked(
   toBlock: bigint,
   deadline: number,
 ): Promise<DecodedLog[]> {
-  // Scan NEWEST-first so recent claims are found within the time budget even
-  // when the deploy block is unknown and the window is large.
-  const out: DecodedLog[] = [];
-  let chunk = 50_000n;
+  // Build windows newest-first so recent claims come back first.
+  const windows: Array<[bigint, bigint]> = [];
   let end = toBlock;
-  let guard = 0;
-  while (end >= fromBlock && guard++ < 400) {
+  while (end >= fromBlock) {
+    const start = end - LOG_RANGE + 1n < fromBlock ? fromBlock : end - LOG_RANGE + 1n;
+    windows.push([start, end]);
+    if (start <= fromBlock) break;
+    end = start - 1n;
+  }
+
+  const out: DecodedLog[] = [];
+  for (let i = 0; i < windows.length; i += CONCURRENCY) {
     if (Date.now() > deadline) break; // don't blow the function timeout
-    const start = end - chunk + 1n < fromBlock ? fromBlock : end - chunk + 1n;
-    try {
-      const logs = await client.getLogs({
-        address: CONTRACT_ADDRESS,
-        event,
-        fromBlock: start,
-        toBlock: end,
-      });
-      out.push(...(logs as unknown as DecodedLog[]));
-      end = start - 1n;
-      if (chunk < 50_000n) chunk *= 2n; // recover after a shrink
-    } catch {
-      if (chunk <= 1_000n) {
-        // Can't go smaller; skip this window rather than fail the whole page.
-        end = start - 1n;
-      } else {
-        chunk /= 2n; // RPC range too big — retry smaller
-      }
-    }
+    const batch = windows.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(([s, e]) =>
+        client
+          .getLogs({ address: CONTRACT_ADDRESS, event, fromBlock: s, toBlock: e })
+          .then((l) => l as unknown as DecodedLog[])
+          .catch(() => [] as DecodedLog[]),
+      ),
+    );
+    for (const r of results) out.push(...r);
   }
   return out;
 }
