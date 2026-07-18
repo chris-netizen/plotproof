@@ -1,5 +1,6 @@
 package com.example.plotproof
 
-import io.flutter.embedding.android.FlutterActivity
+// local_auth requires a FragmentActivity host to show the biometric prompt.
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterFragmentActivity()

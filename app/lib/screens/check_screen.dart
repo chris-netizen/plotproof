@@ -7,6 +7,7 @@ import 'package:web3dart/crypto.dart' show hexToBytes;
 import 'package:web3dart/web3dart.dart';
 
 import '../geocell.dart';
+import '../services/auth_service.dart';
 import '../services/chain_service.dart';
 import '../services/wallet_service.dart';
 import '../theme.dart';
@@ -27,6 +28,7 @@ class _CheckScreenState extends State<CheckScreen> {
   // Default view: Enugu. Change to your demo area.
   static final _initialCenter = LatLng(6.4402, 7.4943);
   final _mapController = MapController();
+  final _auth = AuthService();
 
   LatLng? _pin;
   List<ChainClaim> _claims = [];
@@ -109,6 +111,21 @@ class _CheckScreenState extends State<CheckScreen> {
                 hintText: '0x…',
               ),
             ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.lock_rounded,
+                    size: 15, color: AppColors.inkSoft),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                      'You\'ll confirm with your fingerprint, face or PIN.',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.inkSoft.withValues(alpha: 0.9))),
+                ),
+              ],
+            ),
           ],
         ),
         actions: [
@@ -127,6 +144,16 @@ class _CheckScreenState extends State<CheckScreen> {
       toAddr = EthereumAddress.fromHex(to);
     } catch (_) {
       _snack('That is not a valid wallet address.');
+      return;
+    }
+
+    // Security gate: prove it's the owner (fingerprint / face / PIN) before
+    // giving the claim away. The contract also enforces owner-only transfer.
+    final confirmed =
+        await _auth.confirm('Confirm it\'s you before selling this claim');
+    if (!mounted) return;
+    if (!confirmed) {
+      _snack('Sale cancelled — identity not confirmed.');
       return;
     }
 
