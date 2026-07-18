@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:web3dart/crypto.dart' show hexToBytes;
@@ -33,6 +34,8 @@ class _CheckScreenState extends State<CheckScreen> {
   String? _error;
   bool _checked = false;
   String? _myAddr; // this device's wallet, to offer transfer on owned claims
+  LatLng? _myLocation; // where the user physically is ("you are here")
+  bool _locating = false;
 
   @override
   void initState() {
@@ -40,6 +43,40 @@ class _CheckScreenState extends State<CheckScreen> {
     widget.wallet.address().then((a) {
       if (mounted) setState(() => _myAddr = a.hexEip55.toLowerCase());
     });
+    // Show the user's position as soon as the map is on screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _locateMe());
+  }
+
+  /// Find the user's current GPS position, drop a "you are here" dot, and
+  /// (optionally) recenter the map on it.
+  Future<void> _locateMe({bool recenter = true}) async {
+    if (_locating) return;
+    setState(() => _locating = true);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _snack('Turn on location services to see where you are.');
+        return;
+      }
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        _snack('Location permission is needed to show your position.');
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      final here = LatLng(pos.latitude, pos.longitude);
+      if (!mounted) return;
+      setState(() => _myLocation = here);
+      if (recenter) _mapController.move(here, 16);
+    } catch (_) {
+      _snack('Could not get your location. Try again with a clear sky view.');
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
   }
 
   int get _claimantCount =>
@@ -210,6 +247,13 @@ class _CheckScreenState extends State<CheckScreen> {
                             ? AppColors.danger
                             : AppColors.warning),
                   ),
+                if (_myLocation != null)
+                  Marker(
+                    point: _myLocation!,
+                    width: 26,
+                    height: 26,
+                    child: const _MeDot(),
+                  ),
                 if (_pin != null)
                   Marker(
                     point: _pin!,
@@ -226,6 +270,11 @@ class _CheckScreenState extends State<CheckScreen> {
             top: 12,
             right: 12,
             child: _MapHint(busy: _busy),
+          ),
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: _LocateButton(busy: _locating, onTap: _locateMe),
           ),
         ],
       ),
@@ -335,6 +384,62 @@ class _CheckScreenState extends State<CheckScreen> {
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
+
+/// The classic "you are here" blue dot with a white ring.
+class _MeDot extends StatelessWidget {
+  const _MeDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3.5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 4),
+        ],
+      ),
+      child: const DecoratedBox(
+        decoration: BoxDecoration(
+          color: Color(0xFF1B73E8), // location blue
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}
+
+/// Recenter-on-me button that sits on the map.
+class _LocateButton extends StatelessWidget {
+  final bool busy;
+  final VoidCallback onTap;
+  const _LocateButton({required this.busy, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: const CircleBorder(),
+      elevation: 3,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: busy ? null : onTap,
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: busy
+              ? const Padding(
+                  padding: EdgeInsets.all(13),
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                )
+              : const Icon(Icons.my_location_rounded,
+                  size: 22, color: AppColors.brand),
+        ),
+      ),
+    );
+  }
+}
 
 class _MapHint extends StatelessWidget {
   final bool busy;
