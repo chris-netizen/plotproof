@@ -24,10 +24,11 @@ type DecodedLog = {
   blockNumber: bigint | null;
 };
 
-// Monad testnet caps eth_getLogs at 1000 blocks/request and recommends small
-// ranges with high concurrency. Stay safely under the cap and parallelise.
-const LOG_RANGE = 900n;
-const CONCURRENCY = 6;
+// The public Monad testnet RPC caps eth_getLogs at a 100-block range and
+// recommends small ranges with high concurrency. Stay just under the cap and
+// parallelise aggressively so we can still cover a wide window in the budget.
+const LOG_RANGE = 99n;
+const CONCURRENCY = 25;
 
 /** getLogs across a range using valid <=1000-block windows, newest-first,
  *  with bounded concurrency and a time budget. */
