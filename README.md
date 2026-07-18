@@ -49,7 +49,7 @@ rather than a false alarm.
 | | |
 |---|---|
 | **Network** | Monad testnet (chain id `10143`) |
-| **Contract** | [`0x145c75CBccF30FF9c40091cf424e6945A7545CA1`](https://testnet.monadexplorer.com/address/0x145c75CBccF30FF9c40091cf424e6945A7545CA1) |
+| **Contract** | [`0xD53EBd6F4AF19D43F468c9c4434310f190e4e0D4`](https://testnet.monadexplorer.com/address/0xD53EBd6F4AF19D43F468c9c4434310f190e4e0D4) |
 | **Source** | [`contracts/PlotProof.sol`](contracts/PlotProof.sol) |
 
 ## Architecture

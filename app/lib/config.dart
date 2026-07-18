@@ -14,7 +14,7 @@ class ChainConfig {
 
   /// Your deployed PlotProof contract address.
   static const String contractAddress =
-      '0x145c75CBccF30FF9c40091cf424e6945A7545CA1';
+      '0xD53EBd6F4AF19D43F468c9c4434310f190e4e0D4';
 
   /// Block explorer base URL for linking to txs (from docs.monad.xyz).
   static const String explorerTxBase = 'https://testnet.monadexplorer.com/tx/';
