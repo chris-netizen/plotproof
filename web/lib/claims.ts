@@ -24,11 +24,14 @@ type DecodedLog = {
   blockNumber: bigint | null;
 };
 
-// The public Monad testnet RPC caps eth_getLogs at a 100-block range and
-// recommends small ranges with high concurrency. Stay just under the cap and
-// parallelise aggressively so we can still cover a wide window in the budget.
-const LOG_RANGE = 99n;
-const CONCURRENCY = 25;
+// RPC access pattern — tunable per provider.
+//   Public testnet-rpc.monad.xyz: 100-block getLogs cap + 25 req/sec.
+//   A dedicated RPC (Alchemy/QuickNode) allows big ranges — set a large
+//   PLOTPROOF_LOG_RANGE (e.g. 2000) and higher RPS for fast, complete loads.
+const LOG_RANGE = BigInt(process.env.PLOTPROOF_LOG_RANGE ?? "99");
+const CONCURRENCY = Number(process.env.PLOTPROOF_CONCURRENCY ?? "8");
+const RPS = Number(process.env.PLOTPROOF_RPC_RPS ?? "20"); // max getLogs/sec
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** getLogs across a range using valid <=1000-block windows, newest-first,
  *  with bounded concurrency and a time budget. */
@@ -54,6 +57,7 @@ async function getLogsChunked(
   for (let i = 0; i < windows.length; i += CONCURRENCY) {
     if (Date.now() > deadline) break; // don't blow the function timeout
     const batch = windows.slice(i, i + CONCURRENCY);
+    const batchStart = Date.now();
     const results = await Promise.all(
       batch.map(([s, e]) =>
         client
@@ -68,6 +72,13 @@ async function getLogsChunked(
     for (const r of results) {
       out.push(...r.logs);
       if ("error" in r && r.error && !sampleError) sampleError = r.error;
+    }
+    // Throttle so we stay under the provider's requests/sec limit.
+    const minMs = (batch.length / RPS) * 1000;
+    const elapsed = Date.now() - batchStart;
+    const more = i + CONCURRENCY < windows.length;
+    if (more && elapsed < minMs && Date.now() + (minMs - elapsed) < deadline) {
+      await sleep(minMs - elapsed);
     }
   }
   return { logs: out, sampleError };
